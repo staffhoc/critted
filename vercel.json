@@ -1,0 +1,28 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-products",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/sync-sounds",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/sync-shops",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/breakout-detection",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-digest",
+      "schedule": "0 8 * * 1"
+    },
+    {
+      "path": "/api/cron/watchlist-alerts",
+      "schedule": "0 12 * * *"
+    }
+  ]
+}
