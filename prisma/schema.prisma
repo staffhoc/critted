@@ -482,6 +482,59 @@ model ShopSnapshot {
 }
 
 // ============================================================================
+// HASHTAGS
+// ============================================================================
+
+model Hashtag {
+  id         String @id @default(cuid())
+  externalId String @unique // TikTok hashtag ID
+  locale     Locale
+  name       String
+
+  // Metrics
+  videoCount Int @default(0)
+  viewCount  BigInt @default(0)
+
+  // Ranking
+  currentRank  Int?
+  previousRank Int?
+  rankChange   Int @default(0)
+
+  // Status
+  isTrending Boolean @default(false)
+  isNew      Boolean @default(false)
+
+  // Trend data
+  trendData Json?
+
+  lastUpdatedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Snapshots
+  snapshots HashtagSnapshot[]
+
+  @@index([locale])
+  @@index([currentRank])
+  @@index([viewCount])
+  @@index([isTrending])
+}
+
+model HashtagSnapshot {
+  id           String   @id @default(cuid())
+  hashtagId    String
+  snapshotDate DateTime @default(now())
+  videoCount   Int
+  viewCount    BigInt
+  rank         Int?
+
+  // Relations
+  hashtag Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  @@index([hashtagId, snapshotDate])
+}
+
+// ============================================================================
 // CREATORS & VIDEOS
 // ============================================================================
 

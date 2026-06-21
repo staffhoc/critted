@@ -280,6 +280,66 @@ export interface SociaVaultTrendingFeedResponse {
   credits_used?: number;
 }
 
+// Popular Hashtags Response
+export interface SociaVaultPopularHashtag {
+  hashtag_id?: string;
+  hashtag_name: string;
+  video_count?: number;
+  view_count?: number;
+  rank: number;
+  rank_change?: number;
+  is_stable?: boolean;
+  country_code?: string;
+  industry?: string;
+  trend?: Array<{
+    time: number;
+    value: number;
+  }>;
+}
+
+export interface SociaVaultPopularHashtagsResponse {
+  success: boolean;
+  hashtags?: SociaVaultPopularHashtag[];
+  pagination?: {
+    page: number;
+    total: number;
+    has_more: boolean;
+  };
+  credits_used?: number;
+}
+
+// Popular Videos Response
+export interface SociaVaultPopularVideo {
+  video_id?: string;
+  aweme_id?: string;
+  item_id?: string;
+  desc?: string;
+  thumbnail_url?: string;
+  duration?: number;
+  link?: string;
+  country_code?: string;
+  region_name?: string;
+  statistics?: {
+    play_count?: number;
+    digg_count?: number;
+    comment_count?: number;
+    share_count?: number;
+    collect_count?: number;
+  };
+}
+
+export interface SociaVaultPopularVideosResponse {
+  success: boolean;
+  videos?: SociaVaultPopularVideo[];
+  pagination?: {
+    page: number;
+    per_page: number;
+    total: number;
+    has_more: boolean;
+  };
+  credits_used?: number;
+}
+
 // =============================================================================
 // Normalized Types (for internal use)
 // =============================================================================
@@ -325,6 +385,31 @@ export interface NormalizedSound {
   video_count?: number;
   is_commercial?: boolean;
   trend_data?: Array<{ time: number; value: number }>;
+}
+
+export interface NormalizedHashtag {
+  hashtag_id: string;
+  name: string;
+  video_count: number;
+  view_count: number;
+  rank: number;
+  rank_change?: number;
+  country_code?: string;
+  trend_data?: Array<{ time: number; value: number }>;
+}
+
+export interface NormalizedVideo {
+  video_id: string;
+  description?: string;
+  thumbnail_url?: string;
+  duration?: number;
+  link?: string;
+  country_code?: string;
+  play_count: number;
+  like_count: number;
+  comment_count: number;
+  share_count: number;
+  collect_count: number;
 }
 
 // =============================================================================
@@ -590,6 +675,62 @@ class SociaVaultClient {
     };
   }
 
+  /**
+   * Get popular hashtags
+   */
+  async getPopularHashtags(options: {
+    page?: number;
+    period?: 7 | 30 | 120;
+    countryCode?: string;
+    newOnBoard?: boolean;
+  } = {}): Promise<{ hashtags: NormalizedHashtag[]; hasMore: boolean; total: number }> {
+    const response = await this.request<SociaVaultPopularHashtagsResponse>(
+      "/v1/scrape/tiktok/hashtags/popular",
+      {
+        page: options.page || 1,
+        period: options.period || 7,
+        countryCode: options.countryCode || "US",
+        newOnBoard: options.newOnBoard,
+      }
+    );
+
+    const hashtags = (response.hashtags || []).map(this.normalizeHashtag);
+
+    return {
+      hashtags,
+      hasMore: response.pagination?.has_more || false,
+      total: response.pagination?.total || hashtags.length,
+    };
+  }
+
+  /**
+   * Get popular videos
+   */
+  async getPopularVideos(options: {
+    page?: number;
+    period?: 7 | 30;
+    orderBy?: "like" | "hot" | "comment" | "repost";
+    countryCode?: string;
+  } = {}): Promise<{ videos: NormalizedVideo[]; hasMore: boolean; total: number }> {
+    const response = await this.request<SociaVaultPopularVideosResponse>(
+      "/v1/scrape/tiktok/videos/popular",
+      {
+        page: options.page || 1,
+        period: options.period || 7,
+        orderBy: options.orderBy || "like",
+        countryCode: options.countryCode || "US",
+      }
+    );
+
+    const videos = (response.videos || []).map(this.normalizeVideo);
+
+    return {
+      videos,
+      hasMore: response.pagination?.has_more || false,
+      total: response.pagination?.total || videos.length,
+    };
+  }
+
   // ===========================================================================
   // Normalization Helpers
   // ===========================================================================
@@ -690,6 +831,35 @@ class SociaVaultClient {
       video_count: music.user_count,
       is_commercial: undefined,
       trend_data: undefined,
+    };
+  }
+
+  private normalizeHashtag(hashtag: SociaVaultPopularHashtag): NormalizedHashtag {
+    return {
+      hashtag_id: hashtag.hashtag_id || hashtag.hashtag_name,
+      name: hashtag.hashtag_name,
+      video_count: hashtag.video_count || 0,
+      view_count: hashtag.view_count || 0,
+      rank: hashtag.rank,
+      rank_change: hashtag.rank_change,
+      country_code: hashtag.country_code,
+      trend_data: hashtag.trend,
+    };
+  }
+
+  private normalizeVideo(video: SociaVaultPopularVideo): NormalizedVideo {
+    return {
+      video_id: video.video_id || video.aweme_id || video.item_id || "",
+      description: video.desc,
+      thumbnail_url: video.thumbnail_url,
+      duration: video.duration,
+      link: video.link,
+      country_code: video.country_code,
+      play_count: video.statistics?.play_count || 0,
+      like_count: video.statistics?.digg_count || 0,
+      comment_count: video.statistics?.comment_count || 0,
+      share_count: video.statistics?.share_count || 0,
+      collect_count: video.statistics?.collect_count || 0,
     };
   }
 }

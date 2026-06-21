@@ -12,17 +12,22 @@ const MARKETS_TO_SYNC: { locale: Locale; region: string }[] = [
 ];
 
 // Search queries to find trending products across categories
-// Using more specific product-related terms that are likely to return results
+// Using popular TikTok Shop product categories
 const TRENDING_QUERIES = [
   "skincare",
-  "makeup",
+  "lip gloss",
+  "mascara",
   "phone case",
-  "jewelry",
-  "clothing",
-  "fitness",
-  "home decor",
-  "kitchen",
+  "earrings",
+  "necklace",
+  "leggings",
+  "water bottle",
+  "led lights",
+  "air fryer",
 ];
+
+// Number of pages to fetch per query (each page = 30 products)
+const PAGES_PER_QUERY = 2;
 
 export async function GET(request: Request) {
   // Verify cron secret
@@ -61,37 +66,44 @@ export async function GET(request: Request) {
 
         // Search for products using multiple queries to get a diverse set
         for (const query of TRENDING_QUERIES) {
-          try {
-            const response = await sociaVault.searchProducts({
-              query,
-              page: 1,
-              region,
-            });
+          // Fetch multiple pages per query
+          for (let page = 1; page <= PAGES_PER_QUERY; page++) {
+            try {
+              const response = await sociaVault.searchProducts({
+                query,
+                page,
+                region,
+              });
 
-            console.log(`[Sync Products] Query "${query}" returned ${response.products.length} products for ${region}`);
-            console.log(`[Sync Products] Query "${query}" hasMore: ${response.hasMore}`);
+              console.log(`[Sync Products] Query "${query}" page ${page} returned ${response.products.length} products for ${region}`);
 
-            for (const product of response.products) {
-              // Skip duplicates
-              if (seenProductIds.has(product.product_id)) {
-                continue;
+              for (const product of response.products) {
+                // Skip duplicates
+                if (seenProductIds.has(product.product_id)) {
+                  continue;
+                }
+                seenProductIds.add(product.product_id);
+
+                const rank = seenProductIds.size; // Use order as rank
+
+                try {
+                  await upsertProduct(product, locale, rank);
+                  processed++;
+                } catch (error) {
+                  console.error(`Failed to process product ${product.product_id}:`, error);
+                  failed++;
+                }
               }
-              seenProductIds.add(product.product_id);
 
-              const rank = seenProductIds.size; // Use order as rank
-
-              try {
-                await upsertProduct(product, locale, rank);
-                processed++;
-              } catch (error) {
-                console.error(`Failed to process product ${product.product_id}:`, error);
-                failed++;
+              // Stop if no more results
+              if (!response.hasMore || response.products.length === 0) {
+                break;
               }
+            } catch (queryError) {
+              const errorMessage = queryError instanceof Error ? queryError.message : "Unknown error";
+              console.error(`Failed to search for "${query}" page ${page} in ${region}:`, errorMessage);
+              break; // Move to next query on error
             }
-          } catch (queryError) {
-            const errorMessage = queryError instanceof Error ? queryError.message : "Unknown error";
-            console.error(`Failed to search for "${query}" in ${region}:`, errorMessage);
-            console.error(`[Sync Products] Query error stack:`, queryError instanceof Error ? queryError.stack : undefined);
           }
         }
 
