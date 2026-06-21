@@ -47,6 +47,8 @@ export async function GET(request: Request) {
 
       try {
         console.log(`[Sync Sounds] Fetching popular sounds for country: ${countryCode}`);
+        console.log(`[Sync Sounds] API Key present: ${!!process.env.SOCIAVAULT_API_KEY}`);
+        console.log(`[Sync Sounds] API Key length: ${process.env.SOCIAVAULT_API_KEY?.length || 0}`);
 
         // Fetch popular sounds from SociaVault
         // Note: This endpoint can take up to 30 seconds to respond
@@ -58,6 +60,7 @@ export async function GET(request: Request) {
         });
 
         console.log(`[Sync Sounds] Got ${response.sounds.length} sounds for ${countryCode}`);
+        console.log(`[Sync Sounds] Response hasMore: ${response.hasMore}, total: ${response.total}`);
 
         for (const sound of response.sounds) {
           try {
@@ -112,7 +115,9 @@ export async function GET(request: Request) {
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "Unknown error";
-        console.error(`Failed to sync sounds for ${locale}:`, error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        console.error(`Failed to sync sounds for ${locale}:`, errorMessage);
+        console.error(`[Sync Sounds] Error stack:`, errorStack);
 
         await prisma.dataIngestionJob.update({
           where: { id: job.id },

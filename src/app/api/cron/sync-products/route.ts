@@ -52,6 +52,8 @@ export async function GET(request: Request) {
 
       try {
         console.log(`[Sync Products] Fetching products for region: ${region}`);
+        console.log(`[Sync Products] API Key present: ${!!process.env.SOCIAVAULT_API_KEY}`);
+        console.log(`[Sync Products] API Key length: ${process.env.SOCIAVAULT_API_KEY?.length || 0}`);
 
         // Search for products using multiple queries to get a diverse set
         for (const query of TRENDING_QUERIES) {
@@ -63,6 +65,7 @@ export async function GET(request: Request) {
             });
 
             console.log(`[Sync Products] Query "${query}" returned ${response.products.length} products for ${region}`);
+            console.log(`[Sync Products] Query "${query}" hasMore: ${response.hasMore}`);
 
             for (const product of response.products) {
               // Skip duplicates
@@ -82,7 +85,9 @@ export async function GET(request: Request) {
               }
             }
           } catch (queryError) {
-            console.error(`Failed to search for "${query}" in ${region}:`, queryError);
+            const errorMessage = queryError instanceof Error ? queryError.message : "Unknown error";
+            console.error(`Failed to search for "${query}" in ${region}:`, errorMessage);
+            console.error(`[Sync Products] Query error stack:`, queryError instanceof Error ? queryError.stack : undefined);
           }
         }
 
