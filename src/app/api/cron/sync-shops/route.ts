@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getTikHub, localeToRegion, TikHubShop } from "@/lib/tikhub";
 import { Locale } from "@/generated/prisma";
 
 // Vercel Cron: Run daily at 4 AM UTC
 // Configure in vercel.json: "crons": [{ "path": "/api/cron/sync-shops", "schedule": "0 4 * * *" }]
 
-// Markets to sync
+// Note: SociaVault doesn't have a dedicated "top shops" endpoint.
+// Shops are discovered and created during product sync when products have shop info.
+// This job aggregates shop statistics from their products.
+
 const MARKETS_TO_SYNC: Locale[] = ["US", "UK"];
 
 export async function GET(request: Request) {
@@ -22,10 +24,7 @@ export async function GET(request: Request) {
   const results: Record<string, { processed: number; failed: number }> = {};
 
   try {
-    const tikHub = getTikHub();
-
     for (const locale of MARKETS_TO_SYNC) {
-      const region = localeToRegion(locale);
       let processed = 0;
       let failed = 0;
 
@@ -40,23 +39,26 @@ export async function GET(request: Request) {
       });
 
       try {
-        console.log(`[Sync Shops] Fetching shops for region: ${region}`);
+        console.log(`[Sync Shops] Aggregating shop stats for locale: ${locale}`);
 
-        // Fetch top shops from TikHub (derived from top products)
-        const response = await tikHub.getTopShops({
-          region,
-          limit: 50,
+        // Get all shops for this locale that have products
+        const shops = await prisma.shop.findMany({
+          where: { locale },
+          include: {
+            _count: {
+              select: { products: true },
+            },
+          },
         });
 
-        console.log(`[Sync Shops] Got ${response.shops?.length || 0} shops for ${region}`);
-        const shops = response.shops || [];
+        console.log(`[Sync Shops] Found ${shops.length} shops for ${locale}`);
 
         for (const shop of shops) {
           try {
-            await upsertShop(shop, locale);
+            await updateShopStats(shop.id);
             processed++;
           } catch (error) {
-            console.error(`Failed to process shop ${shop.shop_id}:`, error);
+            console.error(`Failed to update shop ${shop.id}:`, error);
             failed++;
           }
         }
@@ -108,67 +110,49 @@ export async function GET(request: Request) {
   }
 }
 
-async function upsertShop(shop: TikHubShop, locale: Locale) {
-  const externalId = shop.shop_id;
-
-  // Find existing shop
-  const existing = await prisma.shop.findUnique({
-    where: { externalId },
+async function updateShopStats(shopId: string) {
+  // Aggregate stats from the shop's products
+  const stats = await prisma.product.aggregate({
+    where: { shopId },
+    _count: { id: true },
+    _sum: {
+      totalSales: true,
+      totalRevenue: true,
+      reviewCount: true,
+    },
+    _avg: {
+      avgRating: true,
+    },
   });
 
-  // Upsert shop
-  const upsertedShop = await prisma.shop.upsert({
-    where: { externalId },
-    create: {
-      externalId,
-      locale,
-      name: shop.shop_name,
-      description: shop.description,
-      logoUrl: shop.logo_url,
-      productCount: shop.product_count,
-      totalSales: shop.sold_count,
-      totalRevenue: 0, // Will be calculated from products
-      avgRating: shop.rating,
-      reviewCount: shop.review_count || 0,
-      followerCount: shop.follower_count || 0,
-      isVerified: shop.is_verified || false,
-    },
-    update: {
-      name: shop.shop_name,
-      description: shop.description,
-      logoUrl: shop.logo_url,
-      productCount: shop.product_count,
-      totalSales: shop.sold_count,
-      avgRating: shop.rating,
-      reviewCount: shop.review_count || 0,
-      followerCount: shop.follower_count || 0,
-      isVerified: shop.is_verified || false,
+  const productCount = stats._count.id || 0;
+  const totalSales = stats._sum.totalSales || 0;
+  const totalRevenue = stats._sum.totalRevenue || 0;
+  const avgRating = stats._avg.avgRating || null;
+  const reviewCount = stats._sum.reviewCount || 0;
+
+  // Update shop with aggregated stats
+  const updatedShop = await prisma.shop.update({
+    where: { id: shopId },
+    data: {
+      productCount,
+      totalSales,
+      totalRevenue,
+      avgRating,
+      reviewCount,
     },
   });
 
   // Create daily snapshot
   await prisma.shopSnapshot.create({
     data: {
-      shopId: upsertedShop.id,
-      productCount: shop.product_count,
-      totalSales: shop.sold_count,
-      totalRevenue: 0,
-      followerCount: shop.follower_count || 0,
+      shopId,
+      productCount,
+      totalSales,
+      totalRevenue,
+      followerCount: updatedShop.followerCount || 0,
     },
   });
 
-  // Update shop's total revenue from its products
-  const productsRevenue = await prisma.product.aggregate({
-    where: { shopId: upsertedShop.id },
-    _sum: { totalRevenue: true },
-  });
-
-  if (productsRevenue._sum.totalRevenue) {
-    await prisma.shop.update({
-      where: { id: upsertedShop.id },
-      data: { totalRevenue: productsRevenue._sum.totalRevenue },
-    });
-  }
-
-  return upsertedShop;
+  return updatedShop;
 }

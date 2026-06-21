@@ -1,13 +1,24 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getTikHub, localeToRegion, TikHubProduct } from "@/lib/tikhub";
+import { getSociaVault, NormalizedProduct } from "@/lib/sociavault";
 import { Locale } from "@/generated/prisma";
 
 // Vercel Cron: Run daily at 2 AM UTC
 // Configure in vercel.json: "crons": [{ "path": "/api/cron/sync-products", "schedule": "0 2 * * *" }]
 
-// Markets to sync (start with US, expand later)
-const MARKETS_TO_SYNC: Locale[] = ["US", "UK"];
+// Markets to sync - SociaVault supports: US, GB, DE, FR, IT, ID, MY, MX, PH, SG, ES, TH, VN, BR, JP, IE
+const MARKETS_TO_SYNC: { locale: Locale; region: string }[] = [
+  { locale: "US", region: "US" },
+  { locale: "UK", region: "GB" },
+];
+
+// Search queries to find trending products across categories
+const TRENDING_QUERIES = [
+  "trending",
+  "viral",
+  "best seller",
+  "tiktok made me buy it",
+];
 
 export async function GET(request: Request) {
   // Verify cron secret
@@ -22,12 +33,12 @@ export async function GET(request: Request) {
   const results: Record<string, { processed: number; failed: number }> = {};
 
   try {
-    const tikHub = getTikHub();
+    const sociaVault = getSociaVault();
 
-    for (const locale of MARKETS_TO_SYNC) {
-      const region = localeToRegion(locale);
+    for (const { locale, region } of MARKETS_TO_SYNC) {
       let processed = 0;
       let failed = 0;
+      const seenProductIds = new Set<string>();
 
       // Create ingestion job record
       const job = await prisma.dataIngestionJob.create({
@@ -42,28 +53,40 @@ export async function GET(request: Request) {
       try {
         console.log(`[Sync Products] Fetching products for region: ${region}`);
 
-        // Fetch trending products from TikHub
-        const response = await tikHub.getTopProducts({
-          region,
-          sort_by: "post", // Order by post volume (most viral)
-          limit: 100,
-        });
-
-        console.log(`[Sync Products] Got ${response.products?.length || 0} products for ${region}`);
-        const products = response.products || [];
-
-        for (let i = 0; i < products.length; i++) {
-          const product = products[i];
-          const rank = i + 1;
-
+        // Search for products using multiple queries to get a diverse set
+        for (const query of TRENDING_QUERIES) {
           try {
-            await upsertProduct(product, locale, rank);
-            processed++;
-          } catch (error) {
-            console.error(`Failed to process product ${product.product_id}:`, error);
-            failed++;
+            const response = await sociaVault.searchProducts({
+              query,
+              page: 1,
+              region,
+            });
+
+            console.log(`[Sync Products] Query "${query}" returned ${response.products.length} products for ${region}`);
+
+            for (const product of response.products) {
+              // Skip duplicates
+              if (seenProductIds.has(product.product_id)) {
+                continue;
+              }
+              seenProductIds.add(product.product_id);
+
+              const rank = seenProductIds.size; // Use order as rank
+
+              try {
+                await upsertProduct(product, locale, rank);
+                processed++;
+              } catch (error) {
+                console.error(`Failed to process product ${product.product_id}:`, error);
+                failed++;
+              }
+            }
+          } catch (queryError) {
+            console.error(`Failed to search for "${query}" in ${region}:`, queryError);
           }
         }
+
+        console.log(`[Sync Products] Total unique products for ${region}: ${seenProductIds.size}`);
 
         // Update job status
         await prisma.dataIngestionJob.update({
@@ -113,7 +136,7 @@ export async function GET(request: Request) {
 }
 
 async function upsertProduct(
-  product: TikHubProduct,
+  product: NormalizedProduct,
   locale: Locale,
   rank: number
 ) {
@@ -159,9 +182,11 @@ async function upsertProduct(
         externalId: product.shop_id,
         locale,
         name: product.shop_name || "Unknown Shop",
+        logoUrl: product.shop_logo,
       },
       update: {
         name: product.shop_name || undefined,
+        logoUrl: product.shop_logo || undefined,
       },
     });
     shopId = shop.id;
@@ -179,15 +204,15 @@ async function upsertProduct(
       locale,
       name: product.title,
       description: product.description,
-      imageUrl: product.cover_image,
+      imageUrl: product.image_url,
       price: product.price,
       originalPrice: product.original_price,
       currency: product.currency || "USD",
-      commissionRate: product.commission_rate || 0,
+      commissionRate: 0, // Not available from SociaVault
       shopId,
       totalSales: product.sold_count,
       totalRevenue: product.price * product.sold_count,
-      totalVideos: product.video_count || 0,
+      totalVideos: 0, // Not available from search
       avgRating: product.rating,
       reviewCount: product.review_count || 0,
       currentRank: rank,
@@ -200,14 +225,12 @@ async function upsertProduct(
     update: {
       name: product.title,
       description: product.description,
-      imageUrl: product.cover_image,
+      imageUrl: product.image_url,
       price: product.price,
       originalPrice: product.original_price,
-      commissionRate: product.commission_rate ?? undefined,
       shopId,
       totalSales: product.sold_count,
       totalRevenue: product.price * product.sold_count,
-      totalVideos: product.video_count || 0,
       avgRating: product.rating,
       reviewCount: product.review_count || 0,
       previousRank: existing?.currentRank,

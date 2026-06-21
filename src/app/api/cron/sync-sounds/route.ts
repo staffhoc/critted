@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getTikHub, localeToRegion, TikHubSound } from "@/lib/tikhub";
+import { getSociaVault, NormalizedSound } from "@/lib/sociavault";
 import { Locale } from "@/generated/prisma";
 
 // Vercel Cron: Run daily at 3 AM UTC
 // Configure in vercel.json: "crons": [{ "path": "/api/cron/sync-sounds", "schedule": "0 3 * * *" }]
 
-// Markets to sync
-const MARKETS_TO_SYNC: Locale[] = ["US", "UK"];
+// Markets to sync - SociaVault supports country codes for music
+const MARKETS_TO_SYNC: { locale: Locale; countryCode: string }[] = [
+  { locale: "US", countryCode: "US" },
+  { locale: "UK", countryCode: "GB" },
+];
 
 // Thresholds for viral/trending detection
 const VIRAL_THRESHOLD = 100000; // 100k+ videos
@@ -26,10 +29,9 @@ export async function GET(request: Request) {
   const results: Record<string, { processed: number; failed: number }> = {};
 
   try {
-    const tikHub = getTikHub();
+    const sociaVault = getSociaVault();
 
-    for (const locale of MARKETS_TO_SYNC) {
-      const region = localeToRegion(locale);
+    for (const { locale, countryCode } of MARKETS_TO_SYNC) {
       let processed = 0;
       let failed = 0;
 
@@ -44,29 +46,58 @@ export async function GET(request: Request) {
       });
 
       try {
-        console.log(`[Sync Sounds] Fetching sounds for region: ${region}`);
+        console.log(`[Sync Sounds] Fetching popular sounds for country: ${countryCode}`);
 
-        // Fetch trending sounds from TikHub
-        // Note: TikHub uses Douyin music endpoint as a fallback
-        const response = await tikHub.getTrendingSounds({
-          region,
-          limit: 100,
+        // Fetch popular sounds from SociaVault
+        // Note: This endpoint can take up to 30 seconds to respond
+        const response = await sociaVault.getPopularSounds({
+          page: 1,
+          timePeriod: "7", // Last 7 days
+          rankType: "popular",
+          countryCode,
         });
 
-        console.log(`[Sync Sounds] Got ${response.sounds?.length || 0} sounds for ${region}`);
-        const sounds = response.sounds || [];
+        console.log(`[Sync Sounds] Got ${response.sounds.length} sounds for ${countryCode}`);
 
-        for (let i = 0; i < sounds.length; i++) {
-          const sound = sounds[i];
-          const rank = i + 1;
-
+        for (const sound of response.sounds) {
           try {
-            await upsertSound(sound, locale, rank);
+            await upsertSound(sound, locale);
             processed++;
           } catch (error) {
-            console.error(`Failed to process sound ${sound.music_id}:`, error);
+            console.error(`Failed to process sound ${sound.sound_id}:`, error);
             failed++;
           }
+        }
+
+        // Also fetch "surging" sounds (rapidly growing)
+        try {
+          const surgingResponse = await sociaVault.getPopularSounds({
+            page: 1,
+            timePeriod: "7",
+            rankType: "surging",
+            countryCode,
+          });
+
+          console.log(`[Sync Sounds] Got ${surgingResponse.sounds.length} surging sounds for ${countryCode}`);
+
+          for (const sound of surgingResponse.sounds) {
+            // Check if we already processed this sound
+            const exists = await prisma.sound.findUnique({
+              where: { externalId: sound.sound_id },
+            });
+
+            if (!exists) {
+              try {
+                await upsertSound(sound, locale);
+                processed++;
+              } catch (error) {
+                console.error(`Failed to process surging sound ${sound.sound_id}:`, error);
+                failed++;
+              }
+            }
+          }
+        } catch (surgingError) {
+          console.error(`Failed to fetch surging sounds for ${countryCode}:`, surgingError);
         }
 
         // Update job status
@@ -117,11 +148,11 @@ export async function GET(request: Request) {
 }
 
 async function upsertSound(
-  sound: TikHubSound,
-  locale: Locale,
-  rank: number
+  sound: NormalizedSound,
+  locale: Locale
 ) {
-  const externalId = sound.music_id;
+  const externalId = sound.sound_id;
+  const rank = sound.rank;
 
   // Find existing sound
   const existing = await prisma.sound.findUnique({
@@ -131,6 +162,17 @@ async function upsertSound(
   // Calculate velocity (videos per day) based on previous data
   let videoVelocity = 0;
   let velocityChange = 0;
+  let videoCount = sound.video_count || 0;
+
+  // If we have trend data, estimate video count from the trend
+  if (sound.trend_data && sound.trend_data.length > 0) {
+    // Trend data contains normalized values (0-1), estimate relative growth
+    const recentTrend = sound.trend_data[sound.trend_data.length - 1]?.value || 0;
+    const oldTrend = sound.trend_data[0]?.value || 0;
+    if (oldTrend > 0) {
+      velocityChange = ((recentTrend - oldTrend) / oldTrend) * 100;
+    }
+  }
 
   if (existing) {
     // Get last snapshot to calculate velocity
@@ -139,12 +181,12 @@ async function upsertSound(
       orderBy: { snapshotDate: "desc" },
     });
 
-    if (lastSnapshot) {
+    if (lastSnapshot && videoCount > 0) {
       const daysSinceSnapshot = Math.max(
         1,
         (Date.now() - lastSnapshot.snapshotDate.getTime()) / (1000 * 60 * 60 * 24)
       );
-      const videoDiff = sound.video_count - lastSnapshot.videoCount;
+      const videoDiff = videoCount - lastSnapshot.videoCount;
       videoVelocity = videoDiff / daysSinceSnapshot;
 
       // Calculate velocity change percentage
@@ -156,11 +198,11 @@ async function upsertSound(
 
   // Calculate rank change
   const previousRank = existing?.currentRank ?? null;
-  const rankChange = previousRank ? previousRank - rank : 0;
+  const rankChange = sound.rank_change ?? (previousRank ? previousRank - rank : 0);
 
   // Determine viral/trending status
-  const isViral = sound.video_count >= VIRAL_THRESHOLD;
-  const isTrending = velocityChange >= TRENDING_VELOCITY_THRESHOLD;
+  const isViral = videoCount >= VIRAL_THRESHOLD;
+  const isTrending = velocityChange >= TRENDING_VELOCITY_THRESHOLD || (sound.rank_change !== undefined && sound.rank_change > 0);
 
   // Calculate daily video count (videos created today)
   const dailyVideoCount = Math.max(0, Math.round(videoVelocity));
@@ -172,11 +214,11 @@ async function upsertSound(
       externalId,
       locale,
       title: sound.title,
-      authorName: sound.author_name,
+      authorName: sound.author,
       duration: sound.duration,
       coverUrl: sound.cover_url,
-      audioUrl: sound.play_url,
-      videoCount: sound.video_count,
+      audioUrl: sound.link, // TikTok music page URL
+      videoCount,
       dailyVideoCount,
       currentRank: rank,
       previousRank,
@@ -189,11 +231,11 @@ async function upsertSound(
     },
     update: {
       title: sound.title,
-      authorName: sound.author_name,
+      authorName: sound.author,
       duration: sound.duration,
       coverUrl: sound.cover_url,
-      audioUrl: sound.play_url,
-      videoCount: sound.video_count,
+      audioUrl: sound.link,
+      videoCount,
       dailyVideoCount,
       previousRank: existing?.currentRank,
       currentRank: rank,
@@ -206,15 +248,17 @@ async function upsertSound(
     },
   });
 
-  // Create daily snapshot
-  await prisma.soundSnapshot.create({
-    data: {
-      soundId: upsertedSound.id,
-      videoCount: sound.video_count,
-      rank,
-      videoVelocity,
-    },
-  });
+  // Create daily snapshot (only if we have a video count)
+  if (videoCount > 0) {
+    await prisma.soundSnapshot.create({
+      data: {
+        soundId: upsertedSound.id,
+        videoCount,
+        rank,
+        videoVelocity,
+      },
+    });
+  }
 
   return upsertedSound;
 }
