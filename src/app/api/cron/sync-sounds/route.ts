@@ -49,58 +49,100 @@ export async function GET(request: Request) {
         console.log(`[Sync Sounds] API Key present: ${!!process.env.SOCIAVAULT_API_KEY}`);
         console.log(`[Sync Sounds] API Key length: ${process.env.SOCIAVAULT_API_KEY?.length || 0}`);
 
-        // Fetch popular sounds from SociaVault
+        let usedFallback = false;
+
+        // Try to fetch popular sounds from SociaVault
         // Note: This endpoint can take up to 30 seconds to respond
-        const response = await sociaVault.getPopularSounds({
-          page: 1,
-          timePeriod: "7", // Last 7 days
-          rankType: "popular",
-          countryCode,
-        });
-
-        console.log(`[Sync Sounds] Got ${response.sounds.length} sounds for ${countryCode}`);
-        console.log(`[Sync Sounds] Response hasMore: ${response.hasMore}, total: ${response.total}`);
-
-        for (const sound of response.sounds) {
-          try {
-            await upsertSound(sound, locale);
-            processed++;
-          } catch (error) {
-            console.error(`Failed to process sound ${sound.sound_id}:`, error);
-            failed++;
-          }
-        }
-
-        // Also fetch "surging" sounds (rapidly growing)
         try {
-          const surgingResponse = await sociaVault.getPopularSounds({
+          const response = await sociaVault.getPopularSounds({
             page: 1,
-            timePeriod: "7",
-            rankType: "surging",
+            timePeriod: "7", // Last 7 days
+            rankType: "popular",
             countryCode,
           });
 
-          console.log(`[Sync Sounds] Got ${surgingResponse.sounds.length} surging sounds for ${countryCode}`);
+          console.log(`[Sync Sounds] Got ${response.sounds.length} sounds for ${countryCode}`);
+          console.log(`[Sync Sounds] Response hasMore: ${response.hasMore}, total: ${response.total}`);
 
-          for (const sound of surgingResponse.sounds) {
-            // Check if we already processed this sound
-            const exists = await prisma.sound.findUnique({
-              where: { externalId: sound.sound_id },
-            });
-
-            if (!exists) {
-              try {
-                await upsertSound(sound, locale);
-                processed++;
-              } catch (error) {
-                console.error(`Failed to process surging sound ${sound.sound_id}:`, error);
-                failed++;
-              }
+          for (const sound of response.sounds) {
+            try {
+              await upsertSound(sound, locale);
+              processed++;
+            } catch (error) {
+              console.error(`Failed to process sound ${sound.sound_id}:`, error);
+              failed++;
             }
           }
-        } catch (surgingError) {
-          console.error(`Failed to fetch surging sounds for ${countryCode}:`, surgingError);
+
+          // Also fetch "surging" sounds (rapidly growing)
+          try {
+            const surgingResponse = await sociaVault.getPopularSounds({
+              page: 1,
+              timePeriod: "7",
+              rankType: "surging",
+              countryCode,
+            });
+
+            console.log(`[Sync Sounds] Got ${surgingResponse.sounds.length} surging sounds for ${countryCode}`);
+
+            for (const sound of surgingResponse.sounds) {
+              // Check if we already processed this sound
+              const exists = await prisma.sound.findUnique({
+                where: { externalId: sound.sound_id },
+              });
+
+              if (!exists) {
+                try {
+                  await upsertSound(sound, locale);
+                  processed++;
+                } catch (error) {
+                  console.error(`Failed to process surging sound ${sound.sound_id}:`, error);
+                  failed++;
+                }
+              }
+            }
+          } catch (surgingError) {
+            console.error(`Failed to fetch surging sounds for ${countryCode}:`, surgingError);
+          }
+        } catch (popularError) {
+          // Popular endpoint is down, use search as fallback
+          console.log(`[Sync Sounds] Popular endpoint failed, using search fallback`);
+          console.error(`[Sync Sounds] Popular error:`, popularError instanceof Error ? popularError.message : popularError);
+          usedFallback = true;
+
+          // Search for trending music using various keywords
+          const searchQueries = ["trending", "viral", "popular", "tiktok"];
+          const seenSoundIds = new Set<string>();
+
+          for (const query of searchQueries) {
+            try {
+              const searchResponse = await sociaVault.searchSounds({
+                keyword: query,
+                region: countryCode,
+                sortType: "1", // Most used
+              });
+
+              console.log(`[Sync Sounds] Search "${query}" returned ${searchResponse.sounds.length} sounds`);
+
+              for (const sound of searchResponse.sounds) {
+                if (seenSoundIds.has(sound.sound_id)) continue;
+                seenSoundIds.add(sound.sound_id);
+
+                try {
+                  await upsertSound(sound, locale);
+                  processed++;
+                } catch (error) {
+                  console.error(`Failed to process searched sound ${sound.sound_id}:`, error);
+                  failed++;
+                }
+              }
+            } catch (searchError) {
+              console.error(`[Sync Sounds] Search "${query}" failed:`, searchError instanceof Error ? searchError.message : searchError);
+            }
+          }
         }
+
+        console.log(`[Sync Sounds] Completed for ${countryCode}: ${processed} processed, ${failed} failed, fallback: ${usedFallback}`);
 
         // Update job status
         await prisma.dataIngestionJob.update({

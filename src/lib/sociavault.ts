@@ -182,6 +182,31 @@ export interface SociaVaultMusicDetailsResponse {
   credits_used?: number;
 }
 
+// Search Music Response
+export interface SociaVaultSearchMusicItem {
+  id?: string;
+  id_str?: string;
+  title?: string;
+  author?: string;
+  album?: string;
+  duration?: number;
+  user_count?: number;
+  cover_large?: {
+    url_list?: string[];
+  };
+  play_url?: {
+    url_list?: string[];
+  };
+}
+
+export interface SociaVaultSearchMusicResponse {
+  success: boolean;
+  music_list?: SociaVaultSearchMusicItem[];
+  has_more?: number; // 0 or 1
+  cursor?: number;
+  credits_used?: number;
+}
+
 // Popular Creators Response
 export interface SociaVaultCreator {
   tcm_id?: string;
@@ -347,6 +372,8 @@ class SociaVaultClient {
 
     const result = await response.json();
     console.log(`[SociaVault] Response keys:`, Object.keys(result));
+    // Log first 500 chars of response for debugging
+    console.log(`[SociaVault] Response preview:`, JSON.stringify(result).slice(0, 500));
 
     if (result.success === false) {
       console.error(`[SociaVault] API Error:`, result);
@@ -483,6 +510,37 @@ class SociaVaultClient {
     return response.data || null;
   }
 
+  /**
+   * Search for music/sounds by keyword
+   * Use this as a fallback when the popular music endpoint is down
+   */
+  async searchSounds(options: {
+    keyword: string;
+    region?: string;
+    sortType?: "0" | "1" | "2" | "3" | "4"; // 0=relevance, 1=most used, 2=most recent
+    offset?: number;
+  }): Promise<{ sounds: NormalizedSound[]; hasMore: boolean; cursor?: number }> {
+    const response = await this.request<SociaVaultSearchMusicResponse>(
+      "/v1/scrape/tiktok/search/music",
+      {
+        keyword: options.keyword,
+        region: options.region || "US",
+        sort_type: options.sortType || "1", // Most used by default
+        offset: options.offset,
+      }
+    );
+
+    const sounds = (response.music_list || []).map((music, index) =>
+      this.normalizeSearchMusic(music, index + 1 + (options.offset || 0))
+    );
+
+    return {
+      sounds,
+      hasMore: response.has_more === 1,
+      cursor: response.cursor,
+    };
+  }
+
   // ===========================================================================
   // TikTok Trending/Popular Endpoints
   // ===========================================================================
@@ -615,6 +673,23 @@ class SociaVaultClient {
       duration: sound.duration,
       is_commercial: sound.if_cml,
       trend_data: sound.trend,
+    };
+  }
+
+  private normalizeSearchMusic(music: SociaVaultSearchMusicItem, rank: number): NormalizedSound {
+    return {
+      sound_id: music.id_str || music.id || "",
+      clip_id: music.id_str || music.id,
+      title: music.title || "Unknown",
+      author: music.author || "Unknown",
+      cover_url: music.cover_large?.url_list?.[0],
+      link: undefined,
+      rank,
+      rank_change: undefined,
+      duration: music.duration,
+      video_count: music.user_count,
+      is_commercial: undefined,
+      trend_data: undefined,
     };
   }
 }
