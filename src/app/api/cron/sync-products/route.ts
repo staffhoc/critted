@@ -12,11 +12,16 @@ const MARKETS_TO_SYNC: { locale: Locale; region: string }[] = [
 ];
 
 // Search queries to find trending products across categories
+// Using more specific product-related terms that are likely to return results
 const TRENDING_QUERIES = [
-  "trending",
-  "viral",
-  "best seller",
-  "tiktok made me buy it",
+  "skincare",
+  "makeup",
+  "phone case",
+  "jewelry",
+  "clothing",
+  "fitness",
+  "home decor",
+  "kitchen",
 ];
 
 export async function GET(request: Request) {
