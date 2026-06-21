@@ -50,23 +50,51 @@ export interface TikHubProductList {
 
 // Response types for /api/v1/tiktok/ads/get_top_products
 interface TikHubTopProductsResponse {
-  materials: TikHubTopProductMaterial[];
+  list: TikHubTopProductItem[];
   pagination?: {
     page: number;
-    limit: number;
-    total_count: number;
-    total_pages: number;
+    size: number;
+    total: number;
+    has_more: boolean;
   };
 }
 
-interface TikHubTopProductMaterial {
+interface TikHubTopProductItem {
+  // Product identification
+  url_title?: string;
+  cover_url?: string;
+
+  // Category hierarchy
+  first_ecom_category?: string;
+  second_ecom_category?: string;
+  third_ecom_category?: string;
+
+  // Engagement metrics
+  comment?: number;
+  like?: number;
+  share?: number;
+
+  // Performance metrics
+  ctr?: number;
+  cvr?: number;
+  cpa?: number;
+  cost?: number;
+
+  // Posting volume
+  post?: number;
+  post_change?: number;
+
+  // Reach metrics
+  impression?: number;
+  play_six_rate?: number;
+
+  // Legacy fields (in case API returns these)
   id?: string;
   product_id?: string;
   title?: string;
   product_name?: string;
   description?: string;
   image_url?: string;
-  cover_url?: string;
   price?: string;
   original_price?: string;
   currency?: string;
@@ -82,7 +110,6 @@ interface TikHubTopProductMaterial {
   rating?: number;
   review_count?: number;
   video_count?: number;
-  post_count?: number;
 }
 
 // Response types for Douyin music endpoints
@@ -257,6 +284,7 @@ class TikHubClient {
 
     const result = await response.json();
     console.log(`[TikHub] Response keys:`, Object.keys(result));
+    console.log(`[TikHub] Full response (first 2000 chars):`, JSON.stringify(result, null, 2).slice(0, 2000));
 
     // Handle different response formats
     // TikHub API returns code: 200 for success (not 0)
@@ -269,6 +297,8 @@ class TikHubClient {
         throw new Error(`TikHub API error: ${result.code} - ${result.message}`);
       }
       console.log(`[TikHub] Success - code: ${result.code}`);
+      console.log(`[TikHub] data field type:`, typeof result.data);
+      console.log(`[TikHub] data field keys:`, result.data ? Object.keys(result.data) : "null/undefined");
       return result.data as T;
     }
 
@@ -307,11 +337,19 @@ class TikHubClient {
       }
     );
 
+    // Debug: Log the actual response structure
+    console.log(`[TikHub] getTopProducts result type:`, typeof result);
+    console.log(`[TikHub] getTopProducts result keys:`, result ? Object.keys(result) : "null");
+    console.log(`[TikHub] getTopProducts list length:`, result?.list?.length ?? "undefined");
+    console.log(`[TikHub] getTopProducts full result:`, JSON.stringify(result, null, 2).slice(0, 1000));
+
     // Transform the response to our standard format
+    // API returns 'list' field, not 'materials'
+    const items = result?.list || [];
     return {
-      products: (result.materials || []).map(this.transformTopProduct),
-      total: result.pagination?.total_count || 0,
-      has_more: (result.pagination?.page || 1) < (result.pagination?.total_pages || 1),
+      products: items.map(this.transformTopProduct),
+      total: result?.pagination?.total || items.length,
+      has_more: result?.pagination?.has_more || false,
       cursor: undefined,
     };
   }
@@ -319,24 +357,27 @@ class TikHubClient {
   /**
    * Transform TikHub top products response to our standard format
    */
-  private transformTopProduct(material: TikHubTopProductMaterial): TikHubProduct {
+  private transformTopProduct(item: TikHubTopProductItem): TikHubProduct {
+    // Generate a unique ID from url_title if no explicit ID
+    const productId = item.product_id || item.id || item.url_title || `product-${Date.now()}`;
+
     return {
-      product_id: material.product_id || material.id || "",
-      title: material.title || material.product_name || "",
-      description: material.description,
-      cover_image: material.image_url || material.cover_url,
-      price: parseFloat(material.price || "0"),
-      original_price: parseFloat(material.original_price || material.price || "0"),
-      currency: material.currency || "USD",
-      commission_rate: material.commission_rate,
-      category_id: material.category_id,
-      category_name: material.category_name,
-      shop_id: material.shop_id || material.seller_id,
-      shop_name: material.shop_name || material.seller_name,
-      sold_count: material.sold_count || material.order_count || 0,
-      rating: material.rating,
-      review_count: material.review_count,
-      video_count: material.video_count || material.post_count,
+      product_id: productId,
+      title: item.title || item.product_name || item.url_title || "",
+      description: item.description,
+      cover_image: item.image_url || item.cover_url,
+      price: parseFloat(item.price || "0"),
+      original_price: parseFloat(item.original_price || item.price || "0"),
+      currency: item.currency || "USD",
+      commission_rate: item.commission_rate,
+      category_id: item.category_id,
+      category_name: item.category_name || item.first_ecom_category,
+      shop_id: item.shop_id || item.seller_id,
+      shop_name: item.shop_name || item.seller_name,
+      sold_count: item.sold_count || item.order_count || 0,
+      rating: item.rating,
+      review_count: item.review_count,
+      video_count: item.video_count || item.post,
     };
   }
 
