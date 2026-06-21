@@ -9,7 +9,6 @@ import { Locale } from "@/generated/prisma";
 // Markets to sync - SociaVault supports country codes for music
 const MARKETS_TO_SYNC: { locale: Locale; countryCode: string }[] = [
   { locale: "US", countryCode: "US" },
-  { locale: "UK", countryCode: "GB" },
 ];
 
 // Thresholds for viral/trending detection

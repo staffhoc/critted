@@ -9,7 +9,7 @@ import { Locale } from "@/generated/prisma";
 // Shops are discovered and created during product sync when products have shop info.
 // This job aggregates shop statistics from their products.
 
-const MARKETS_TO_SYNC: Locale[] = ["US", "UK"];
+const MARKETS_TO_SYNC: Locale[] = ["US"];
 
 export async function GET(request: Request) {
   // Verify cron secret

@@ -9,7 +9,6 @@ import { Locale } from "@/generated/prisma";
 // Markets to sync - SociaVault supports: US, GB, DE, FR, IT, ID, MY, MX, PH, SG, ES, TH, VN, BR, JP, IE
 const MARKETS_TO_SYNC: { locale: Locale; region: string }[] = [
   { locale: "US", region: "US" },
-  { locale: "UK", region: "GB" },
 ];
 
 // Search queries to find trending products across categories
