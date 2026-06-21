@@ -259,13 +259,16 @@ class TikHubClient {
     console.log(`[TikHub] Response keys:`, Object.keys(result));
 
     // Handle different response formats
-    // Some endpoints return { code: 0, data: ... }
+    // TikHub API returns code: 200 for success (not 0)
+    // Some endpoints return { code: 200, data: ... }
     // Some endpoints return data directly
     if (result.code !== undefined) {
-      if (result.code !== 0) {
+      // Success codes: 0 or 200
+      if (result.code !== 0 && result.code !== 200) {
         console.error(`[TikHub] API Error: ${result.code} - ${result.message}`);
         throw new Error(`TikHub API error: ${result.code} - ${result.message}`);
       }
+      console.log(`[TikHub] Success - code: ${result.code}`);
       return result.data as T;
     }
 
