@@ -49,6 +49,7 @@ export interface TikHubProductList {
 }
 
 // Response types for /api/v1/tiktok/ads/get_top_products
+// This endpoint returns TikTok Ads Creative Center data - trending ad products
 interface TikHubTopProductsResponse {
   list: TikHubTopProductItem[];
   pagination?: {
@@ -59,15 +60,22 @@ interface TikHubTopProductsResponse {
   };
 }
 
+interface TikHubEcomCategory {
+  id?: string;
+  label?: string;
+  value?: string;
+  parent_id?: string;
+}
+
 interface TikHubTopProductItem {
   // Product identification
   url_title?: string;
-  cover_url?: string;
+  cover_url?: string | null;
 
-  // Category hierarchy
-  first_ecom_category?: string;
-  second_ecom_category?: string;
-  third_ecom_category?: string;
+  // Category hierarchy (objects, not strings)
+  first_ecom_category?: TikHubEcomCategory;
+  second_ecom_category?: TikHubEcomCategory;
+  third_ecom_category?: TikHubEcomCategory;
 
   // Engagement metrics
   comment?: number;
@@ -75,41 +83,18 @@ interface TikHubTopProductItem {
   share?: number;
 
   // Performance metrics
-  ctr?: number;
-  cvr?: number;
-  cpa?: number;
+  ctr?: number;  // Click-through rate
+  cvr?: number;  // Conversion rate
+  cpa?: number;  // Cost per acquisition
   cost?: number;
 
-  // Posting volume
-  post?: number;
-  post_change?: number;
+  // Posting volume (this is the "viral" indicator)
+  post?: number;        // Number of posts/videos featuring this product
+  post_change?: number; // Change in post count
 
   // Reach metrics
   impression?: number;
   play_six_rate?: number;
-
-  // Legacy fields (in case API returns these)
-  id?: string;
-  product_id?: string;
-  title?: string;
-  product_name?: string;
-  description?: string;
-  image_url?: string;
-  price?: string;
-  original_price?: string;
-  currency?: string;
-  commission_rate?: number;
-  category_id?: string;
-  category_name?: string;
-  shop_id?: string;
-  seller_id?: string;
-  shop_name?: string;
-  seller_name?: string;
-  sold_count?: number;
-  order_count?: number;
-  rating?: number;
-  review_count?: number;
-  video_count?: number;
 }
 
 // Response types for Douyin music endpoints
@@ -355,29 +340,44 @@ class TikHubClient {
   }
 
   /**
-   * Transform TikHub top products response to our standard format
+   * Transform TikHub Ads top products response to our standard format
+   * Note: This endpoint returns ad performance data, not actual product details
+   * We use 'post' count as a proxy for sales velocity (virality indicator)
    */
   private transformTopProduct(item: TikHubTopProductItem): TikHubProduct {
-    // Generate a unique ID from url_title if no explicit ID
-    const productId = item.product_id || item.id || item.url_title || `product-${Date.now()}`;
+    // Generate a unique ID from url_title (the product title/name from ads)
+    const title = item.url_title || "";
+    const productId = title ? Buffer.from(title).toString("base64").slice(0, 32) : `product-${Date.now()}`;
+
+    // Get category from the nested object
+    const categoryName = item.third_ecom_category?.label
+      || item.second_ecom_category?.label
+      || item.first_ecom_category?.label
+      || undefined;
+
+    const categoryId = item.third_ecom_category?.id
+      || item.second_ecom_category?.id
+      || item.first_ecom_category?.id
+      || undefined;
 
     return {
       product_id: productId,
-      title: item.title || item.product_name || item.url_title || "",
-      description: item.description,
-      cover_image: item.image_url || item.cover_url,
-      price: parseFloat(item.price || "0"),
-      original_price: parseFloat(item.original_price || item.price || "0"),
-      currency: item.currency || "USD",
-      commission_rate: item.commission_rate,
-      category_id: item.category_id,
-      category_name: item.category_name || item.first_ecom_category,
-      shop_id: item.shop_id || item.seller_id,
-      shop_name: item.shop_name || item.seller_name,
-      sold_count: item.sold_count || item.order_count || 0,
-      rating: item.rating,
-      review_count: item.review_count,
-      video_count: item.video_count || item.post,
+      title: title,
+      description: undefined, // Not available from ads endpoint
+      cover_image: item.cover_url || undefined,
+      price: 0, // Not available from ads endpoint
+      original_price: 0,
+      currency: "USD",
+      commission_rate: undefined, // Not available
+      category_id: categoryId,
+      category_name: categoryName,
+      shop_id: undefined, // Not available from ads endpoint
+      shop_name: undefined,
+      // Use 'post' count as a proxy for popularity/virality
+      sold_count: item.post || 0,
+      rating: undefined,
+      review_count: undefined,
+      video_count: item.post || 0,
     };
   }
 
